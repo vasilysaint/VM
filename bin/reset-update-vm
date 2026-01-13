@@ -1,0 +1,148 @@
+#!/bin/bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+PROG="$(basename -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." &>/dev/null && pwd)"
+
+IMAGES_DIR="${PROJECT_ROOT}/images"
+BACKUP_DIR="${PROJECT_ROOT}/backups"
+LIB_DIR="${PROJECT_ROOT}/lib"
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  $PROG [options] <VM_HOST>
+
+<VM_HOST> can be an ssh alias, hostname, or user@host.
+
+Options:
+  -r, --reset           Restore latest backup image before starting the VM
+  -f, --force           If tmux session exists, kill it and start a new one
+  -s, --session NAME    tmux session name (default: sysupdate)
+  -p, --path PATH       Remote path for update script (default: ~/update.sh)
+  -w, --wait SECONDS    Wait for SSH to become available (default: 60)
+  -h, --help            Show this help
+EOF
+}
+
+die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+
+reset=false
+force=false
+session="sysupdate"
+remote_path="~/update.sh"
+wait_seconds=60
+
+if ! OPTIONS=$(getopt -o hrfs:p:w: --long help,reset,force,session:,path:,wait: -n "$PROG" -- "$@"); then
+  usage
+  exit 2
+fi
+eval set -- "$OPTIONS"
+
+while true; do
+  case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    -r|--reset) reset=true; shift ;;
+    -f|--force) force=true; shift ;;
+    -s|--session) session="${2:?}"; shift 2 ;;
+    -p|--path) remote_path="${2:?}"; shift 2 ;;
+    -w|--wait) wait_seconds="${2:?}"; shift 2 ;;
+    --) shift; break ;;
+    *) die "Internal option parser error: ${1:-<empty>}" ;;
+  esac
+done
+
+VM_HOST="${1:-}"
+[[ -n "$VM_HOST" ]] || { usage; exit 1; }
+
+STARTVM="$SCRIPT_DIR/startvm"
+[[ -x "$STARTVM" ]] || die "Missing or non-executable: $STARTVM"
+[[ -d "$IMAGES_DIR" ]] || die "Missing images dir: $IMAGES_DIR"
+[[ -d "$BACKUP_DIR" ]] || die "Missing backups dir: $BACKUP_DIR"
+[[ -f "$LIB_DIR/update.sh" ]] || die "Missing update script: $LIB_DIR/update.sh"
+
+VM_NAME="${VM_HOST#*@}"
+target_img="${IMAGES_DIR}/${VM_NAME}.img"
+
+if [[ "$reset" == true ]]; then
+  latest_backup="$(ls -1t "${BACKUP_DIR}/${VM_NAME}.img"-* 2>/dev/null | head -n 1 || true)"
+  [[ -n "$latest_backup" ]] || die "No backup found matching: ${BACKUP_DIR}/${VM_NAME}.img-*"
+
+  echo "[*] Restoring backup:"
+  echo "    $latest_backup -> $target_img"
+  cp --reflink=auto -- "$latest_backup" "$target_img"
+fi
+
+echo "[*] Starting VM: $VM_NAME"
+
+# Cache sudo creds in the foreground so startvm won't try to prompt in the background.
+sudo -v
+
+LOGS_DIR="${PROJECT_ROOT}/logs"
+mkdir -p "$LOGS_DIR"
+STARTVM_LOG="${LOGS_DIR}/reset-update-vm-${VM_NAME}-$(date +%F_%H%M%S).log"
+
+# Detach startvm from terminal (prevents QEMU serial/stdin grabbing the script)
+if command -v setsid >/dev/null 2>&1; then
+  setsid "$STARTVM" -v "$VM_NAME" >"$STARTVM_LOG" 2>&1 < /dev/null &
+else
+  nohup "$STARTVM" -v "$VM_NAME" >"$STARTVM_LOG" 2>&1 < /dev/null &
+fi
+
+STARTVM_PID=$!
+sleep 0.2
+if ! kill -0 "$STARTVM_PID" 2>/dev/null; then
+  echo "[!] startvm died immediately. Log:"
+  tail -n 200 "$STARTVM_LOG" >&2 || true
+  exit 1
+fi
+
+echo "[*] startvm detached (pid=$STARTVM_PID), log: $STARTVM_LOG"
+
+echo "[*] Waiting for SSH on $VM_HOST (up to ${wait_seconds}s)..."
+for ((i=1; i<=wait_seconds; i++)); do
+  if ssh -o ConnectTimeout=3 "$VM_HOST" 'true' >/dev/null 2>&1; then
+    echo "[*] SSH is up."
+    break
+  fi
+  sleep 1
+  if (( i == wait_seconds )); then
+    echo "[!] SSH never became reachable. startvm log: $STARTVM_LOG" >&2
+    die "SSH not reachable on $VM_HOST after ${wait_seconds}s"
+  fi
+done
+
+echo "[*] Copying update script to remote: $remote_path"
+scp -q "$LIB_DIR/update.sh" "${VM_HOST}:${remote_path}"
+
+echo "[*] Launching update inside tmux session: $session"
+ssh "$VM_HOST" "bash -lc '
+  set -euo pipefail
+  chmod +x ${remote_path}
+
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo \"tmux not found; running in background with nohup (log: ~/apt-logs/)...\"
+    mkdir -p ~/apt-logs
+    nohup bash -lc ${remote_path} > ~/update-logs/${session}-nohup.log 2>&1 &
+    exit 0
+  fi
+
+  if tmux has-session -t ${session} 2>/dev/null; then
+    if [[ \"${force}\" == \"true\" ]]; then
+      tmux kill-session -t ${session}
+    else
+      echo \"tmux session ${session} already exists; not starting another. Use --force to restart.\"
+      exit 0
+    fi
+  fi
+
+  tmux new-session -d -s ${session} \"bash -lc ${remote_path}\"
+  echo \"Started tmux session: ${session}\"
+'"
+
+echo "[*] Done. To watch:"
+echo "    ssh $VM_HOST 'tmux attach -t $session'"
+echo "[*] VM launcher log:"
+echo "    $STARTVM_LOG"

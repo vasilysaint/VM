@@ -1,0 +1,177 @@
+#!/bin/bash
+
+# Environment variables
+VERBOSE=false
+PROG="$(basename -- "${BASH_SOURCE[0]}")"
+WORK_DIR="$(pwd -P)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+IMAGES_DIR="${PROJECT_ROOT}/images"
+LIB_DIR="${PROJECT_ROOT}/lib"
+
+LOGS_DIR="${PROJECT_ROOT}/logs"
+mkdir -p "$LOGS_DIR" # It's already idempotent (does nothing if the directory exists)
+
+# VM variables
+CPU="${CPU:-2}"
+RAM="${RAM:-2048}"
+DISKS=()
+NETWORK=()
+USB=()
+BIOS=()
+KBD="${KBD:-fr}"
+BEFORE_QEMU=()
+AFTER_QEMU=()
+
+# Functions
+usage() {
+  cat <<EOF
+Usage: $PROG [options] <VM_NAME> [-- extra-qemu-args...]
+
+Options:
+  -h, --help            Show this help
+  -v, --verbose         Be more verbose
+
+Environment variables (optional):
+  CPU      (default: $CPU)
+  RAM      (default: $RAM)
+  DISKS    (extra qemu args, space-delimited)
+  NETWORK  (extra qemu args, space-delimited)
+  USB      (extra qemu args, space-delimited)
+EOF
+}
+
+die() { printf '[!] Error: %s\n' "$*" >&2; exit 1; }
+
+on_err() {
+  local ec=$?
+  printf '[!] Error: failed (exit %s) at %s:%s\n> %s\n' \
+    "$ec" "${BASH_SOURCE[1]}" "${BASH_LINENO[0]}" "${BASH_COMMAND}" >&2
+  exit "$ec"
+}
+trap on_err ERR
+
+# Option parsing (GNU getopt)
+if ! OPTIONS=$(getopt -o hvo: --long help,verbose,output: -n "$PROG" -- "$@"); then
+  usage >&2
+  exit 2
+fi
+eval set -- "$OPTIONS"
+
+while true; do
+  case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    -v|--verbose) VERBOSE=true; shift ;;
+    --) shift; break ;;
+    *) die "internal option parser error: ${1:-<empty>}" ;;
+  esac
+done
+
+VM_NAME="${1:-}"
+[[ -n "$VM_NAME" ]] || { usage >&2; die "missing <VM_NAME>"; }
+shift || true
+
+STARTVM_LOG="${LOGS_DIR}/startvm-${VM_NAME}-$(date +%F_%H%M%S).log"
+log() {
+    printf '%s\n' "$*" >>"$STARTVM_LOG"
+}
+
+# Load VM config
+VM_CONFIG="${PROJECT_ROOT}/conf/${VM_NAME}.conf"
+source "$VM_CONFIG"
+
+# Basic sanity checks
+command -v qemu-system-x86_64 >/dev/null 2>&1 || die "qemu-system-x86_64 not found in PATH"
+command -v ip >/dev/null || die "iproute2 (ip) not in PATH"
+command -v nft >/dev/null || echo "Warning: nft not found; NAT script may fail"
+
+# Avoid sudo if already root
+sudo_cmd=(sudo)
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+  sudo_cmd=()
+fi
+
+# Ask sudo password once (scripts use sudo)
+sudo -v
+run_hooks() {
+  local name="$1"; shift
+  local -a hooks=("$@")
+  ((${#hooks[@]})) || return 0
+  log "[*] Running ${name} hooks..."
+  for h in "${hooks[@]}"; do
+    [[ -x "$h" ]] || die "Hook not executable: $h"
+    log "  -> $h"
+    "$h"
+  done
+}
+
+# Always cleanup, even on Ctrl-C / error
+cleanup() {
+  local rc=$?
+  set +e
+  if [[ -n "${QEMU_PID:-}" ]] && kill -0 "$QEMU_PID" 2>/dev/null; then
+    log "[*] Stopping QEMU (pid=$QEMU_PID)..."
+    kill -TERM "$QEMU_PID" 2>/dev/null
+    wait "$QEMU_PID" 2>/dev/null
+  fi
+  if declare -p CLEANUP >/dev/null 2>&1; then
+    run_hooks "CLEANUP" "${CLEANUP[@]}"
+  fi
+  log "[*] Exiting (rc=$rc)"
+  exit "$rc"
+}
+trap cleanup EXIT INT TERM
+
+# Pre-QEMU and networking
+run_hooks "[*] BEFORE_QEMU" "${BEFORE_QEMU[@]}"
+
+log "[*] Environment:"
+log "     PROJECT_ROOT: $PROJECT_ROOT"
+log "     SCRIPT_DIR:   $SCRIPT_DIR"
+log "     LIB_DIR:      $LIB_DIR"
+log "     IMAGES_DIR:   $IMAGES_DIR"
+log "     VM_CONFIG:    $VM_CONFIG"
+log "     WORK_DIR:     $WORK_DIR"
+
+log "[*] VM: "
+log "     VM_NAME       $VM_NAME "
+log "     CPU:          $CPU"
+log "     RAM:          $RAM"
+log "     USB:          $USB"
+log "     BIOS:         $BIOS"
+log "     BRIDGE_IF:    $BRIDGE_IF"
+log "     TAP_IF:       $TAP_IF"
+log "     BRIDGE_ADDR:  $BRIDGE_ADDR"
+log "     VM_NET:       $VM_NET"
+log "     WAN_IF:       $WAN_IF"
+
+# Split optional env-provided args (space-delimited)
+# Note: if you need complex quoting, prefer passing extra args after "--".
+read -r -a disks_args   <<<"$DISKS"
+read -r -a net_args     <<<"$NETWORK"
+read -r -a usb_args     <<<"$USB"
+
+# Remaining CLI args after <name> are treated as extra qemu args
+qemu_cmd=(
+  "${sudo_cmd[@]}" qemu-system-x86_64
+  -cpu host
+  -smp "cores=$CPU"
+  -m "$RAM"
+  -k "$KBD"
+  -enable-kvm
+  "${DISKS[@]}"
+  "${NETWORK[@]}"
+  "${USB[@]}"
+  "${BIOS[@]}"
+  "$@"
+)
+
+log "[*] Running: ${qemu_cmd[*]}"
+"${qemu_cmd[@]}"&
+QEMU_PID=$!
+
+# Post-QEMU and networking (if you have things that require QEMU running)
+run_hooks "[*] AFTER_QEMU" "${AFTER_QEMU[@]}"
+
+# Wait until QEMU exits; cleanup runs via trap
+wait "$QEMU_PID"
