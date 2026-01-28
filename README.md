@@ -89,6 +89,7 @@ sudo nft add rule ip qemu_nat postrouting oifname "wlp3s0" ip saddr "15.10.0.0/2
 sudo qemu-system-x86_64 -m 5120 -k fr /home/asilin/VM/images/agnes.img  -enable-kvm -cpu host  -cpu host -smp 4 -device e1000,netdev=net0 -netdev user,id=net0,hostfwd=tcp::2212-:2212 -cdrom /home/asilin/kali-linux-2025.4-installer-everything-amd64.iso
 sudo qemu-system-x86_64 -m 5120 -k fr /home/asilin/VM/debk.img  -enable-kvm -cpu host  -cpu host -smp 4 -device e1000,netdev=net0 -netdev tap,id=net0,script=no,downscript=no
 sudo qemu-system-x86_64 -m 9116 -k fr -net none -enable-kvm -cpu host -smp 4 -drive file=VM/windows.img,format=qcow2 -bios VM/OVMF_CODE.fd
+sudo qemu-system-x86_64 -m 4096 -k fr -net none -enable-kvm -cpu host -smp 4 -drive file=debk.img,format=qcow2  -usb -device usb-host,hostbus=$1,hostaddr=$2
 ```
 
 ## Free space safely (preferred: remove old kernels)
