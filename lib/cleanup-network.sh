@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 BR="${BRIDGE_IF:-br0}"
 TAP="${TAP_IF:-tap0}"
-STATE_DIR="${STATE_DIR:-/tmp/startvm-state}"
+STATE_DIR="${STATE_DIR:-/tmp/start-vm-state}"
 
 # nft cleanup (dedicated table => safe to delete)
 sudo nft list table ip qemu_nat >/dev/null 2>&1 && sudo nft delete table ip qemu_nat || true

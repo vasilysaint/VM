@@ -71,9 +71,9 @@ VM_NAME="${1:-}"
 [[ -n "$VM_NAME" ]] || { usage >&2; die "missing <VM_NAME>"; }
 shift || true
 
-STARTVM_LOG="${LOGS_DIR}/startvm-${VM_NAME}-$(date +%F_%H%M%S).log"
+START_VM_LOG="${LOGS_DIR}/start-vm-${VM_NAME}-$(date +%F_%H%M%S).log"
 log() {
-    printf '%s\n' "$*" >>"$STARTVM_LOG"
+    printf '%s\n' "$*" >>"$START_VM_LOG"
 }
 
 # Load VM config

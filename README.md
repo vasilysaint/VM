@@ -11,8 +11,10 @@ It's a  **QEMU VM launcher toolkit** that simplifies running and managing virtua
 **Use case:** Quickly spin up reproducible QEMU VMs with proper networking, optionally resetting to a known-good state before each run.
 
 # Workflow Summary
-1. `startvm <vm_name>` - Loads `conf/<vm_name>.conf`, runs **BEFORE_QEMU** hooks, starts QEMU, runs **AFTER_QEMU** hooks, waits, then runs CLEANUP on exit.
-2. `reset-update-vm <vm_host>` - Optionally restores a backup image, starts the VM, waits for SSH, copies **update.sh** to the guest, and runs it inside tmux.
+1. `start-vm <vm_name>`  - Loads `conf/<vm_name>.conf`, runs **BEFORE_QEMU** hooks, starts QEMU, runs **AFTER_QEMU** hooks, waits, then runs CLEANUP on exit.
+2. `reset-vm <vm_host>`  - Replace current VM image with it's latest backup (could be slow).
+3. `backup-vm <vm_host>` - Creates a backup of the VM disk image.
+4. `update-vm <vm_host>` - Optionally restores a backup image, starts the VM, waits for SSH, copies **update.sh** to the guest, and runs it inside tmux.
 
 # Project structure
 ## Project layout
@@ -20,8 +22,10 @@ It's a  **QEMU VM launcher toolkit** that simplifies running and managing virtua
 VM/
 ├── backups/          # VM disk image backups (for rollback/reset)
 ├── bin/              # Executable scripts
-│   ├── startvm           # Main VM launcher
-│   └── reset-update-vm   # Restore + start + auto-update workflow
+│   ├── backup-vm     # Backup current VM image
+│   ├── reset-vm      # Replace current VM image with it's latest backup
+│   ├── start-vm      # Main VM launcher
+│   └── update-vm     # Restore + start + auto-update workflow
 ├── conf/             # Per-VM configuration files
 ├── images/           # VM disk images (.img files)
 ├── lib/              # Reusable helper scripts (hooks)
@@ -29,7 +33,7 @@ VM/
 └── README.md         # This file
 ```
 ## Configuration Files (`conf/`)
-Each `.conf` file defines a VM profile - sourced as a bash script by startvm. They set:
+Each `.conf` file defines a VM profile - sourced as a bash script by start-vm. They set:
 
 | Variable | Purpose |
 |----------|---------|

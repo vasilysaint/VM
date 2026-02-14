@@ -1,7 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
 
-STATE_DIR="${STATE_DIR:-/tmp/startvm-state}"
+STATE_DIR="${STATE_DIR:-/tmp/start-vm-state}"
 mkdir -p "$STATE_DIR"
 
 # Save original ip_forward once

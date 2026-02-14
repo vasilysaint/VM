@@ -1,0 +1,68 @@
+#!/bin/bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+PROG="$(basename -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." &>/dev/null && pwd)"
+
+IMAGES_DIR="${PROJECT_ROOT}/images"
+BACKUP_DIR="${PROJECT_ROOT}/backups"
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  $PROG [options] <VM_HOST>
+
+<VM_HOST> can be an ssh alias, hostname, or user@host.
+
+Options:
+  -y, --YES             Restore latest backup image before starting the VM
+  -h, --help            Show this help
+EOF
+}
+
+die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+reset=false
+
+if ! OPTIONS=$(getopt -o hy --long help,yes -n "$PROG" -- "$@"); then
+  usage
+  exit 2
+fi
+eval set -- "$OPTIONS"
+
+while true; do
+  case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    -y|--yes) reset=true; shift ;;
+    --) shift; break ;;
+    *) die "Internal option parser error: ${1:-<empty>}" ;;
+  esac
+done
+
+VM_HOST="${1:-}"
+[[ -n "$VM_HOST" ]] || { die "please specify VM_NAME to backup"; }
+
+VM_NAME="${VM_HOST#*@}"
+target_img="${IMAGES_DIR}/${VM_NAME}.img"
+[[ -n "$target_img" ]] || die "No matching VM: ${target_img}"
+
+backup="${BACKUP_DIR}/${VM_NAME}.img-$(date +'%Y.%m.%d')"
+[[ -n "$backup" ]] && reset=true # No backup yet.
+
+if [[ "$reset" == false ]]; then
+  read -p "Replace current backup ${backup} (y/N): " confirm
+  if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
+    reset=true
+  else
+    exit 0
+  fi
+fi
+
+if [[ "$reset" == true ]]; then
+  echo "[*] Creating backup:"
+  echo "    $target_img -> $backup"
+  cp --reflink=auto -- "$target_img" "$backup"
+fi
+
+echo "[*] Done!"

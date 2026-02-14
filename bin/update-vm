@@ -57,8 +57,8 @@ done
 VM_HOST="${1:-}"
 [[ -n "$VM_HOST" ]] || { usage; exit 1; }
 
-STARTVM="$SCRIPT_DIR/startvm"
-[[ -x "$STARTVM" ]] || die "Missing or non-executable: $STARTVM"
+START_VM="$SCRIPT_DIR/start-vm"
+[[ -x "$START_VM" ]] || die "Missing or non-executable: $START_VM"
 [[ -d "$IMAGES_DIR" ]] || die "Missing images dir: $IMAGES_DIR"
 [[ -d "$BACKUP_DIR" ]] || die "Missing backups dir: $BACKUP_DIR"
 [[ -f "$LIB_DIR/update.sh" ]] || die "Missing update script: $LIB_DIR/update.sh"
@@ -77,29 +77,29 @@ fi
 
 echo "[*] Starting VM: $VM_NAME"
 
-# Cache sudo creds in the foreground so startvm won't try to prompt in the background.
+# Cache sudo creds in the foreground so start-vm won't try to prompt in the background.
 sudo -v
 
 LOGS_DIR="${PROJECT_ROOT}/logs"
 mkdir -p "$LOGS_DIR"
-STARTVM_LOG="${LOGS_DIR}/reset-update-vm-${VM_NAME}-$(date +%F_%H%M%S).log"
+START_VM_LOG="${LOGS_DIR}/update-vm-${VM_NAME}-$(date +%F_%H%M%S).log"
 
-# Detach startvm from terminal (prevents QEMU serial/stdin grabbing the script)
+# Detach start-vm from terminal (prevents QEMU serial/stdin grabbing the script)
 if command -v setsid >/dev/null 2>&1; then
-  setsid "$STARTVM" -v "$VM_NAME" >"$STARTVM_LOG" 2>&1 < /dev/null &
+  setsid "$START_VM" -v "$VM_NAME" >"$START_VM_LOG" 2>&1 < /dev/null &
 else
-  nohup "$STARTVM" -v "$VM_NAME" >"$STARTVM_LOG" 2>&1 < /dev/null &
+  nohup "$START_VM" -v "$VM_NAME" >"$START_VM_LOG" 2>&1 < /dev/null &
 fi
 
-STARTVM_PID=$!
+START_VM_PID=$!
 sleep 0.2
-if ! kill -0 "$STARTVM_PID" 2>/dev/null; then
-  echo "[!] startvm died immediately. Log:"
-  tail -n 200 "$STARTVM_LOG" >&2 || true
+if ! kill -0 "$START_VM_PID" 2>/dev/null; then
+  echo "[!] start-vm died immediately. Log:"
+  tail -n 200 "$START_VM_LOG" >&2 || true
   exit 1
 fi
 
-echo "[*] startvm detached (pid=$STARTVM_PID), log: $STARTVM_LOG"
+echo "[*] start-vm detached (pid=$START_VM_PID), log: $START_VM_LOG"
 
 echo "[*] Waiting for SSH on $VM_HOST (up to ${wait_seconds}s)..."
 for ((i=1; i<=wait_seconds; i++)); do
@@ -109,7 +109,7 @@ for ((i=1; i<=wait_seconds; i++)); do
   fi
   sleep 1
   if (( i == wait_seconds )); then
-    echo "[!] SSH never became reachable. startvm log: $STARTVM_LOG" >&2
+    echo "[!] SSH never became reachable. start-vm log: $START_VM_LOG" >&2
     die "SSH not reachable on $VM_HOST after ${wait_seconds}s"
   fi
 done
@@ -145,4 +145,4 @@ ssh "$VM_HOST" "bash -lc '
 echo "[*] Done. To watch:"
 echo "    ssh $VM_HOST 'tmux attach -t $session'"
 echo "[*] VM launcher log:"
-echo "    $STARTVM_LOG"
+echo "    $START_VM_LOG"
