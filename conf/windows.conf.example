@@ -4,8 +4,8 @@ DISKS=(
     -drive "file=${IMAGES_DIR}/windows.img"
 )
 NETWORK=(
-    -netdev user,id=net0,hostfwd=tcp::443-:443,hostfwd=tcp::1337-:1337,hostfwd=tcp::2222-:2222,hostfwd=tcp::3389-:3389
-    -device e1000,netdev=net0
+    -netdev tap,id=net1,script=no,downscript=no
+    -device e1000,netdev=net1
 )
 BIOS=(
     -bios "${IMAGES_DIR}/OVMF_CODE.fd"
